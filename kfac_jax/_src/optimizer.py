@@ -830,6 +830,8 @@ class Optimizer(utils.WithStagedMethods):
     assert not self._use_adaptive_learning_rate
 
     sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
+    # TODO: my own code!
+    jax.debug.print("sq_norm_grads: {x}", x=sq_norm_grads)
     sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
 
     max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
