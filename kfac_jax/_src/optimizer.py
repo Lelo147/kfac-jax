@@ -61,6 +61,17 @@ ReturnEither = (
 QuadModelParams = tuple[Array, Array, Array, Array]
 
 
+############################## Own code ##############################
+LOG_BUFFER = []
+def log_to_csv(*values):
+    if jax.lax.axis_index("device") == 0:  # Only GPU 0 logs
+        LOG_BUFFER.append(",".join(map(str, values)))
+        if len(LOG_BUFFER) >= 1000:
+            with open("kfac_log.csv", "a") as f:
+                f.write("\n".join(LOG_BUFFER) + "\n")
+            LOG_BUFFER.clear()
+############################## Own code ##############################
+
 class Optimizer(utils.WithStagedMethods):
   """The K-FAC optimizer."""
 
@@ -818,6 +829,8 @@ class Optimizer(utils.WithStagedMethods):
         norm_to_scale_identity_weight_per_block=self._norm_to_scale_identity_weight_per_block,
     )
 
+  
+
   @utils.staged
   def _maybe_apply_norm_constraint(
       self, grads: Params, preconditioned_grads: Params, coefficient: Array
@@ -830,9 +843,11 @@ class Optimizer(utils.WithStagedMethods):
     assert not self._use_adaptive_learning_rate
 
     sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
-    # TODO: my own code!
-    jax.debug.print("sq_norm_grads: {x}", x=sq_norm_grads)
     sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
+
+    ############################## Own code ##############################
+    jax.debug.callback(log_to_csv, self._step, sq_norm_grads, sq_norm_scaled_grads)
+    ############################## Own code ##############################
 
     max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
     coefficient = jnp.minimum(max_coefficient, 1)
