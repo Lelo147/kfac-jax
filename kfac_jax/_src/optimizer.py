@@ -61,16 +61,7 @@ ReturnEither = (
 QuadModelParams = tuple[Array, Array, Array, Array]
 
 
-############################## Own code ##############################
-LOG_BUFFER = []
-def log_to_csv(*values):
-    if jax.lax.axis_index("device") == 0:  # Only GPU 0 logs
-        LOG_BUFFER.append(",".join(map(str, values)))
-        if len(LOG_BUFFER) >= 1000:
-            with open("kfac_log.csv", "a") as f:
-                f.write("\n".join(LOG_BUFFER) + "\n")
-            LOG_BUFFER.clear()
-############################## Own code ##############################
+
 
 class Optimizer(utils.WithStagedMethods):
   """The K-FAC optimizer."""
@@ -93,6 +84,7 @@ class Optimizer(utils.WithStagedMethods):
     damping: Array | None
     data_seen: Numeric
     step_counter: Numeric
+
 
     @classmethod
     def from_dict(cls, dict_representation: dict[str, Any]) -> Self:
@@ -163,6 +155,10 @@ class Optimizer(utils.WithStagedMethods):
       should_vmap_estimator_samples: bool = False,
       norm_to_scale_identity_weight_per_block: str | None = None,
       precon_power: Scalar = -1.0,
+      ############################## Own code ##############################
+      save_path: str = "/data/lelo147/",
+      log_fname: str = "kfac_logs",
+      ############################## Own code ##############################
   ):
     """Initializes the kfac_jax optimizer with the provided settings.
 
@@ -542,6 +538,11 @@ class Optimizer(utils.WithStagedMethods):
         batch_size_extractor=batch_size_extractor,
     )
 
+    ############################## Own code ##############################
+    self._LOG_FNAME = f"{save_path}/{log_fname}.csv"
+    self._LOG_BUFFER = []
+    ############################## Own code ##############################
+
     # Each subclass should call finalize on its own, so this gets called only
     # for instances of exactly this class type.
     if type(self) == Optimizer:  # pylint: disable=unidiomatic-typecheck
@@ -580,6 +581,15 @@ class Optimizer(utils.WithStagedMethods):
       return self._precon_power
     else:
       return None
+    
+  ############################## Own code ##############################
+  def _log_to_csv(self, *values):
+      self._LOG_BUFFER.append(",".join(map(str, values)))
+      if len(self._LOG_BUFFER) >= 1000:
+          with open(self._LOG_FNAME, "a") as f:
+              f.write("\n".join(self._LOG_BUFFER) + "\n")
+          self._LOG_BUFFER.clear()
+  ############################## Own code ##############################
 
   def should_update_damping(self, step_counter: int) -> bool:
     """Whether at the current step the optimizer should update the damping."""
@@ -846,7 +856,8 @@ class Optimizer(utils.WithStagedMethods):
     sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
 
     ############################## Own code ##############################
-    jax.debug.callback(log_to_csv, self._step, sq_norm_grads, sq_norm_scaled_grads)
+    if jax.process_index() == 0:
+      jax.debug.callback(self._log_to_csv, sq_norm_grads, sq_norm_scaled_grads)
     ############################## Own code ##############################
 
     max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
