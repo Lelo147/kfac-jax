@@ -15,7 +15,7 @@
 """K-FAC optimizer."""
 
 import functools
-from typing import Callable, Iterator, Sequence, Any, Generic
+from typing import Callable, Iterator, Sequence, Any, Generic, Optional
 
 import jax
 from jax import lax
@@ -156,8 +156,8 @@ class Optimizer(utils.WithStagedMethods):
       norm_to_scale_identity_weight_per_block: str | None = None,
       precon_power: Scalar = -1.0,
       ############################## Own code ##############################
-      save_path: str = "/data/lelo147/",
-      log_fname: str = "kfac_logs",
+      save_path: Optional[str] = None,
+      log_fname: Optional[str] = None,
       ############################## Own code ##############################
   ):
     """Initializes the kfac_jax optimizer with the provided settings.
@@ -539,7 +539,7 @@ class Optimizer(utils.WithStagedMethods):
     )
 
     ############################## Own code ##############################
-    self._LOG_FNAME = f"{save_path}/{log_fname}.csv"
+    self._LOG_FNAME = f"{save_path}/{log_fname}.csv" if save_path else None
     self._LOG_BUFFER = []
     ############################## Own code ##############################
 
@@ -856,7 +856,7 @@ class Optimizer(utils.WithStagedMethods):
     sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
 
     ############################## Own code ##############################
-    if jax.process_index() == 0:
+    if jax.process_index() == 0 and self._LOG_FNAME is not None:
       jax.debug.callback(self._log_to_csv, sq_norm_grads, sq_norm_scaled_grads)
     ############################## Own code ##############################
 
