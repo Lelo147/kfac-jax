@@ -205,7 +205,8 @@ class Optimizer(utils.WithStagedMethods):
         ######################################################################
         Delta_init: Numeric | None = None,
         use_trust_region: bool = False,
-        alpha_max: Numeric | None = None,
+        lr_max: Numeric | None = None,
+        lr_min: Numeric | None = None,
         adapt_Delta: bool = False,
         k_accept: Numeric = 1.0,
         k_grow: Numeric = 1.0,
@@ -217,6 +218,7 @@ class Optimizer(utils.WithStagedMethods):
         mcmc_step_fn: Callable | None = None,
         move_width_init: Numeric | None = None,
         loss_func: Callable | None = None,
+        Ekin_must_be_pos: bool = False,
         ######################################################################
         ######################################################################
         ######################################################################
@@ -603,8 +605,9 @@ class Optimizer(utils.WithStagedMethods):
         ######################################################################
         self.Delta_init = Delta_init
         self.use_trust_region = use_trust_region
-        self.alpha_max = alpha_max
-        self.adapt_Delta = adapt_Delta
+        self.lr_max = lr_max
+        self.lr_min = lr_min
+        self.adapt_Delta = adapt_Delta if use_trust_region else False
         self.k_accept = k_accept
         self.k_grow = k_grow
         self.k_shrink = k_shrink
@@ -615,6 +618,7 @@ class Optimizer(utils.WithStagedMethods):
         self.mcmc_step_fn = mcmc_step_fn
         self.move_width_init = move_width_init
         self.loss_func = loss_func
+        self.Ekin_must_be_pos = Ekin_must_be_pos
         ######################################################################
         ######################################################################
         ######################################################################
@@ -1032,7 +1036,7 @@ class Optimizer(utils.WithStagedMethods):
         ######################################################################
         ######################################################################
         ######################################################################
-        scaled_grad_norm_sq: Numeric | None,
+        step_metric: Numeric | None,
         ######################################################################
         ######################################################################
         ######################################################################
@@ -1052,10 +1056,12 @@ class Optimizer(utils.WithStagedMethods):
         if self.use_trust_region:
             assert self._use_adaptive_learning_rate is False
             assert self._use_adaptive_momentum is False
-            neg_alpha = -jnp.minimum(
-                self.alpha_max, state.Delta / (jnp.sqrt(scaled_grad_norm_sq) + 1e-16)
+            neg_lr = -jnp.clip(
+                state.Delta / (step_metric + 1e-16),
+                min=self.lr_min,
+                max=self.lr_max,
             )
-            fixed_coefficients = (neg_alpha, momentum)
+            fixed_coefficients = (neg_lr, momentum)
         ######################################################################
         ######################################################################
         ######################################################################
@@ -1372,6 +1378,7 @@ class Optimizer(utils.WithStagedMethods):
         ######################################################################
         if self._norm_constraint is None:
             scaled_grad_norm_sq = utils.inner_product(preconditioned_gradient, grads)
+        step_metric = jnp.sqrt(scaled_grad_norm_sq)
         ######################################################################
         ######################################################################
         ######################################################################
@@ -1389,7 +1396,7 @@ class Optimizer(utils.WithStagedMethods):
             ######################################################################
             ######################################################################
             ######################################################################
-            scaled_grad_norm_sq=scaled_grad_norm_sq,
+            step_metric=step_metric,
             ######################################################################
             ######################################################################
             ######################################################################
@@ -1433,25 +1440,29 @@ class Optimizer(utils.WithStagedMethods):
                 # )
                 del mcmc_key
                 # del new_rng
+            else:
+                new_batch = batch
 
             new_loss, new_aux = self.loss_func(new_params, new_batch)
             new_loss = utils.pmean_if_pmap(new_loss, self.pmap_axis_name)
             is_finite = jnp.asarray(jnp.isfinite(new_loss), dtype=bool)
 
         else:
+            new_batch = batch
             new_loss, new_aux = self._invalid_metric_value, self._invalid_metric_value
-            is_finite = jnp.asarray(True, dtype=bool)
+            is_finite = self._invalid_metric_value
 
         if self._use_step_rejection:
             is_improved = jnp.asarray(
                 new_loss <= (loss + self.k_accept * aux.se), dtype=bool
             )
-            if new_aux is not None:
+            if new_aux is not None and self.Ekin_must_be_pos:
                 Ekin_is_positive = jnp.asarray(new_aux.kinetic >= 0.0, dtype=bool)
                 accept_step = jnp.logical_and(
                     jnp.logical_and(is_finite, is_improved), Ekin_is_positive
                 )
             else:
+                Ekin_is_positive = self._invalid_metric_value
                 accept_step = jnp.logical_and(is_finite, is_improved)
 
             params, state.velocities, state.damping = lax.cond(
@@ -1464,7 +1475,9 @@ class Optimizer(utils.WithStagedMethods):
                 ),
             )
         else:
-            accept_step = jnp.asarray(True, dtype=bool)
+            is_improved = self._invalid_metric_value
+            Ekin_is_positive = self._invalid_metric_value
+            accept_step = self._invalid_metric_value
             params = new_params
             state.velocities = delta
             state.damping = damping
@@ -1481,6 +1494,9 @@ class Optimizer(utils.WithStagedMethods):
                     state.Delta,  # neutral band -> keep
                 ),
             )
+        else:
+            is_good = self._invalid_metric_value
+            is_bad = self._invalid_metric_value
 
         ######################################################################
         ######################################################################
@@ -1555,7 +1571,7 @@ class Optimizer(utils.WithStagedMethods):
             precon_damping=precon_damping,
             rho=rho,
             quad_model_change=quad_model_change,
-            scaled_grad_norm_sq=scaled_grad_norm_sq,
+            step_metric=step_metric,
             ######################################################################
             ######################################################################
             ######################################################################
@@ -1570,8 +1586,19 @@ class Optimizer(utils.WithStagedMethods):
         ######################################################################
         # if self._use_step_rejection:
         #     stats["step_rejected"] = reject_step
+        if self._use_step_rejection or self.adapt_Delta or should_update_damping:
+            stats["is_finite"] = is_finite
+
         if self._use_step_rejection:
             stats["accept_step"] = accept_step
+            stats["is_improved"] = is_improved
+            if self.Ekin_must_be_pos:
+                stats["Ekin_is_positive"] = Ekin_is_positive
+
+        if self.adapt_Delta:
+            stats["is_good"] = is_good
+            stats["is_bad"] = is_bad
+
         ######################################################################
         ######################################################################
         ######################################################################
@@ -1607,7 +1634,13 @@ class Optimizer(utils.WithStagedMethods):
 
         assert func_state is None
 
-        return params, state, stats
+        ######################################################################
+        ######################################################################
+        ######################################################################
+        return params, state, stats, new_batch
+        ######################################################################
+        ######################################################################
+        ######################################################################
 
     def step(
         self,
