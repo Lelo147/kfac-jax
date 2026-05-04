@@ -208,6 +208,8 @@ class Optimizer(utils.WithStagedMethods):
         lr_max: Numeric | None = None,
         lr_min: Numeric | None = None,
         adapt_Delta: bool = False,
+        norm_rate_schedule: Callable | None = None,
+        fixed_update_norm: Numeric | None = None,
         k_accept: Numeric = 1.0,
         k_grow: Numeric = 1.0,
         k_shrink: Numeric = 1.0,
@@ -608,6 +610,8 @@ class Optimizer(utils.WithStagedMethods):
         self.lr_max = lr_max
         self.lr_min = lr_min
         self.adapt_Delta = adapt_Delta if use_trust_region else False
+        self.norm_rate_schedule = norm_rate_schedule
+        self.fixed_update_norm = fixed_update_norm
         self.k_accept = k_accept
         self.k_grow = k_grow
         self.k_shrink = k_shrink
@@ -1056,12 +1060,34 @@ class Optimizer(utils.WithStagedMethods):
         if self.use_trust_region:
             assert self._use_adaptive_learning_rate is False
             assert self._use_adaptive_momentum is False
+            assert self.norm_rate_schedule is None
+            assert self.fixed_update_norm is None
             neg_lr = -jnp.clip(
                 state.Delta / (step_metric + 1e-16),
                 min=self.lr_min,
                 max=self.lr_max,
             )
             fixed_coefficients = (neg_lr, momentum)
+
+        elif self.norm_rate_schedule is not None:
+            assert self._use_adaptive_learning_rate is False
+            assert self._use_adaptive_momentum is False
+            assert self.use_trust_region is False
+            assert self.fixed_update_norm is None
+
+            target_norm = self.norm_rate_schedule(state.step_counter)
+            neg_lr = -target_norm / step_metric
+            fixed_coefficients = (neg_lr, momentum)
+
+        elif self.fixed_update_norm is not None:
+            assert self._use_adaptive_learning_rate is False
+            assert self._use_adaptive_momentum is False
+            assert self.use_trust_region is False
+            assert self.norm_rate_schedule is None
+
+            neg_lr = -self.fixed_update_norm / step_metric
+            fixed_coefficients = (neg_lr, momentum)
+
         ######################################################################
         ######################################################################
         ######################################################################
