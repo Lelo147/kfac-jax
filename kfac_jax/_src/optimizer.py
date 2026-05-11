@@ -123,7 +123,7 @@ class Optimizer(utils.WithStagedMethods):
         ######################################################################
         ######################################################################
         Delta: Numeric
-        move_width: Numeric
+        move_widths: Numeric
         ######################################################################
         ######################################################################
         ######################################################################
@@ -218,7 +218,6 @@ class Optimizer(utils.WithStagedMethods):
         shrink: Numeric = 0.5,
         Delta_min: Numeric = 1e-3,
         mcmc_step_fn: Callable | None = None,
-        move_width_init: Numeric | None = None,
         loss_func: Callable | None = None,
         Ekin_must_be_pos: bool = False,
         ######################################################################
@@ -620,7 +619,6 @@ class Optimizer(utils.WithStagedMethods):
         self.shrink = shrink
         self.Delta_min = Delta_min
         self.mcmc_step_fn = mcmc_step_fn
-        self.move_width_init = move_width_init
         self.loss_func = loss_func
         self.Ekin_must_be_pos = Ekin_must_be_pos
         ######################################################################
@@ -1180,7 +1178,7 @@ class Optimizer(utils.WithStagedMethods):
             ######################################################################
             ######################################################################
             Delta=jnp.array(self.Delta_init, dtype=float),
-            move_width=jnp.array(self.move_width_init, dtype=float),
+            move_widths=jnp.array(jnp.nan),  # will be initialized in mcmc_step
             ######################################################################
             ######################################################################
             ######################################################################
@@ -1335,7 +1333,7 @@ class Optimizer(utils.WithStagedMethods):
         state = state.copy()
 
         # Setup arguments
-        (learning_rate, momentum, damping, precon_damping) = (
+        learning_rate, momentum, damping, precon_damping = (
             self._setup_state_and_schedules(
                 learning_rate,
                 momentum,
@@ -1450,22 +1448,11 @@ class Optimizer(utils.WithStagedMethods):
                     new_params,
                     batch,
                     mcmc_key,
-                    state.move_width,
+                    state.move_widths,
+                    0,  # use step counter 0 -> no move width adaption
                 )
-                # if self._value_func_has_rng:
-                #     mcmc_key, new_rng = jax.random.split(mcmc_key)
-                # else:
-                #     new_rng = None
-                # func_args = make_func_args(
-                #     params=new_params,
-                #     func_state=func_state,
-                #     rng=new_rng,
-                #     batch=self._batch_process_func(new_batch),
-                #     has_state=self._value_func_has_state,
-                #     has_rng=self._value_func_has_rng,
-                # )
                 del mcmc_key
-                # del new_rng
+
             else:
                 new_batch = batch
 
@@ -1663,7 +1650,7 @@ class Optimizer(utils.WithStagedMethods):
         ######################################################################
         ######################################################################
         ######################################################################
-        return params, state, stats, new_batch
+        return params, new_batch, state, stats
         ######################################################################
         ######################################################################
         ######################################################################
