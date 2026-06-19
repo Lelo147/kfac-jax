@@ -120,12 +120,45 @@ pmap_zeros_like = jax.pmap(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 jit_zeros_like = jax.jit(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 
 
-def replicate_all_local_devices(obj: TArrayTree) -> TArrayTree:
-  """Replicates `obj` to all local Jax devices."""
+def _replicate_with_device_put(
+    obj: TArrayTree,
+    devices: Sequence[jax.Device],
+    axis_name: str,
+) -> TArrayTree:
+  """Replicates a pytree using the sharding API used by newer JAX."""
+  mesh = jax.sharding.Mesh(devices, (axis_name,))
+  sharding = jax.sharding.NamedSharding(
+      mesh, jax.sharding.PartitionSpec(axis_name))
+
+  def replicate_leaf(value: Numeric) -> Numeric:
+    stacked = jnp.stack([value] * len(devices))
+    return jax.device_put(stacked, sharding)
+
+  return jax.tree_util.tree_map(replicate_leaf, obj)
+
+
+def replicate_all_local_devices(
+    obj: TArrayTree,
+    axis_name: str | None = None,
+) -> TArrayTree:
+  """Replicates `obj` to all local JAX devices.
+
+  JAX removed ``device_put_replicated`` as part of the pmap migration. Keep
+  using it on older versions, and use an explicitly sharded leading device
+  axis on newer versions.
+  """
   if types.tree_is_empty(obj):
     return obj
 
-  return jax.device_put_replicated(obj, devices=jax.local_devices())
+  devices = jax.local_devices()
+  if hasattr(jax, "device_put_replicated"):
+    return jax.device_put_replicated(obj, devices=devices)
+
+  return _replicate_with_device_put(
+      obj,
+      devices,
+      axis_name=axis_name or "kfac_replicate_axis",
+  )
 
 
 def make_different_rng_key_on_all_devices(rng: PRNGKey) -> PRNGKey:

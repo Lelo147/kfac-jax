@@ -20,6 +20,34 @@ import jax.numpy as jnp
 import kfac_jax
 import numpy as np
 
+from kfac_jax._src.utils import parallel
+
+
+class ReplicateAllLocalDevicesTest(absltest.TestCase):
+  """Tests the sharding-based replacement for device_put_replicated."""
+
+  def test_replicate_with_device_put(self):
+    devices = jax.local_devices()
+    axis_name = "replicate_test_axis"
+    obj = {
+        "array": jnp.arange(3.0),
+        "scalar": jnp.asarray(2.0),
+    }
+
+    replicated = parallel._replicate_with_device_put(
+        obj, devices, axis_name)
+
+    self.assertEqual(replicated["array"].shape, (len(devices), 3))
+    self.assertLen(replicated["array"].addressable_shards, len(devices))
+    np.testing.assert_array_equal(
+        replicated["array"],
+        jnp.stack([obj["array"]] * len(devices)),
+    )
+
+    mapped = jax.pmap(lambda value: value + 1, axis_name=axis_name)(
+        replicated["array"])
+    np.testing.assert_array_equal(mapped, replicated["array"] + 1)
+
 
 class TestStableSqrt(parameterized.TestCase):
   """Test class for the stable square root."""
