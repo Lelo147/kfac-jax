@@ -1478,11 +1478,12 @@ class Optimizer(utils.WithStagedMethods):
                 Ekin_is_positive = self._invalid_metric_value
                 accept_step = jnp.logical_and(is_finite, is_improved)
 
-            params, state.velocities, state.damping = lax.cond(
+            params, batch, state.velocities, state.damping = lax.cond(
                 accept_step,
-                lambda: (new_params, delta, damping),
+                lambda: (new_params, new_batch, delta, damping),
                 lambda: (
                     params,
+                    batch,
                     state.velocities,
                     self._reject_damping_increase_factor * damping,
                 ),
@@ -1492,6 +1493,7 @@ class Optimizer(utils.WithStagedMethods):
             Ekin_is_positive = self._invalid_metric_value
             accept_step = self._invalid_metric_value
             params = new_params
+            batch = new_batch
             state.velocities = delta
             state.damping = damping
 
@@ -1650,7 +1652,7 @@ class Optimizer(utils.WithStagedMethods):
         ######################################################################
         ######################################################################
         ######################################################################
-        return params, new_batch, state, stats
+        return params, batch, state, stats
         ######################################################################
         ######################################################################
         ######################################################################
